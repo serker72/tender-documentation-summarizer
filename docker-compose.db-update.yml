@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:17.5
+    container_name: tender-documentation-summarizer-postgres
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_DB}::${POSTGRES_USER}::${POSTGRES_PASSWORD}|${POSTGRES_TEST_DB}::${POSTGRES_TEST_USER}::${POSTGRES_TEST_PASSWORD}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/opt/tender-documentation-summarizer-data/db}:/var/lib/postgresql/data
+      - ${POSTGRES_BACKUPS_DIR:-/opt/tender-documentation-summarizer-data/backups}:/var/lib/postgresql/backups
+      - ./create-multiple-postgresql-databases.sh:/docker-entrypoint-initdb.d/create-multiple-postgresql-databases.sh
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    container_name: tender-documentation-summarizer-pgbouncer
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    volumes:
+      - ./config_services/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./config_services/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: [ 'CMD', 'pg_isready', '-h', 'localhost' ]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  wait-for-services:
+    image: atkrad/wait4x
+    container_name: tender-documentation-summarizer-wait-for-services
+    command: tcp pgbouncer:${POSTGRES_PORT} --timeout 60s --interval 5s --backoff-policy exponential --backoff-exponential-coefficient 2.0 --backoff-exponential-max-interval 120s
+    restart: "no"
+    depends_on:
+      - pgbouncer
+
+  db-update:
+    image: tender-documentation-summarizer-backend:latest
+    container_name: tender-documentation-summarizer-db-update
+    env_file:
+      - ./.env
+#    command: bash -c "alembic upgrade head; alembic -x is_test=1 upgrade head;"
+    command: bash -c "alembic upgrade head"
+    restart: "no"
+    depends_on:
+      wait-for-services:
+        condition: service_completed_successfully
+
+  db-test-update:
+    image: tender-documentation-summarizer-backend:latest
+    container_name: tender-documentation-summarizer-db-test-update
+    env_file:
+      - ./.env
+    command: bash -c "alembic -x is_test=1 upgrade head"
+    restart: "no"
+    depends_on:
+      wait-for-services:
+        condition: service_completed_successfully
+      db-update:
+        condition: service_completed_successfully

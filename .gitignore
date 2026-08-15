@@ -11,3 +11,7 @@ wheels/
 
 # JetBrains IDE files
 .idea
+
+# KodaCode files
+AGENTS.md
+.kodarules
