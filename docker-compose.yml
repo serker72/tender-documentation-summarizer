@@ -1,0 +1,123 @@
+services:
+  postgres:
+    image: postgres:17.5
+    container_name: tender-documentation-summarizer-postgres
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_DB}::${POSTGRES_USER}::${POSTGRES_PASSWORD}|${POSTGRES_TEST_DB}::${POSTGRES_TEST_USER}::${POSTGRES_TEST_PASSWORD}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/opt/tender-documentation-summarizer-data/db}:/var/lib/postgresql/data
+      - ${POSTGRES_BACKUPS_DIR:-/opt/tender-documentation-summarizer-data/backups}:/var/lib/postgresql/backups
+      - ./create-multiple-postgresql-databases.sh:/docker-entrypoint-initdb.d/create-multiple-postgresql-databases.sh
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    container_name: tender-documentation-summarizer-pgbouncer
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    volumes:
+      - ./config_services/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./config_services/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: [ 'CMD', 'pg_isready', '-h', 'localhost' ]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:8.0.2-bookworm
+    container_name: tender-documentation-summarizer-redis
+    ports:
+      - "0.0.0.0:${REDIS_PORT}:${REDIS_PORT}"
+    volumes:
+      - ${REDIS_DATA_DIR:-/opt/tender-documentation-summarizer-data/redis}:/data
+    command: /bin/sh -c "redis-server --requirepass '${REDIS_PASSWORD}'"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: tender-documentation-summarizer-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    ports:
+      - "0.0.0.0:${RABBITMQ_PORT}:${RABBITMQ_PORT}"
+      - "0.0.0.0:${RABBITMQ_MANAGEMENT_PORT}:${RABBITMQ_MANAGEMENT_PORT}"
+    volumes:
+      - ${RABBITMQ_DATA_DIR:-/opt/tender-documentation-summarizer-data/rabbitmq}:/var/lib/rabbitmq/
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    restart: always
+
+  wait-for-services:
+    image: atkrad/wait4x
+    container_name: tender-documentation-summarizer-wait-for-services
+    command: tcp redis:${REDIS_PORT} pgbouncer:${POSTGRES_PORT} rabbitmq:${RABBITMQ_MANAGEMENT_PORT} --timeout 60s --interval 5s --backoff-policy exponential --backoff-exponential-coefficient 2.0 --backoff-exponential-max-interval 120s
+    restart: "no"
+    depends_on:
+      - redis
+      - pgbouncer
+      - rabbitmq
+
+  app-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tender-documentation-summarizer-backend:latest
+    container_name: tender-documentation-summarizer-app-backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${BACKEND_PORT}:${BACKEND_PORT}"
+    env_file:
+      - ./.env
+    volumes:
+      - .:/app
+      - ${BACKEND_FILE_DIR:-/opt/tender-documentation-summarizer-data/files}:/tmp
+    command: /bin/sh -c "uvicorn --host 0.0.0.0 --port ${BACKEND_PORT} --loop uvloop ${BACKEND_CONTAINER_COMMAND} app.main:app"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:${BACKEND_PORT}${BACKEND_API_PREFIX}/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      wait-for-services:
+        condition: service_completed_successfully
+
+  app-consumer-rabbit:
+    image: tender-documentation-summarizer-backend:latest
+    container_name: tender-documentation-summarizer-app-consumer-rabbit
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - ./.env
+    volumes:
+      - ./:/app
+      - ${BACKEND_FILE_DIR:-/opt/tender-documentation-summarizer-data/files}:/tmp
+    command: /bin/sh -c "python -m app.consumer_rabbit"
+    restart: always
+    depends_on:
+      wait-for-services:
+        condition: service_completed_successfully
