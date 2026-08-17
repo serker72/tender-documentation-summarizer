@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.repositories.contract import ContractRepository
+from app.services.contract import ContractService
 from app.settings import Settings
 
 
@@ -78,6 +80,29 @@ class AsyncRedisProvider(Provider):
         return Redis.from_url(settings.redis_url)
 
 
+class RepositoryProvider(Provider):
+    @provide(scope=Scope.REQUEST)
+    def get_contract_repository(self, session: AsyncSession) -> ContractRepository:
+        """Предоставляет экземпляр ContractRepository."""
+        return ContractRepository(session=session)
+
+
+class ServiceProvider(Provider):
+    @provide(scope=Scope.REQUEST)
+    def get_contract_service(
+        self,
+        contract_repository: ContractRepository,
+        broker: RabbitBroker,
+        settings: Settings,
+    ) -> ContractService:
+        """Предоставляет экземпляр ContractService."""
+        return ContractService(
+            contract_repository=contract_repository,
+            broker=broker,
+            settings=settings,
+        )
+
+
 def get_providers() -> list[Provider]:
     """Получение списка провайдеров Dishka для инъекции зависимостей"""
     return [
@@ -85,4 +110,6 @@ def get_providers() -> list[Provider]:
         BrokerProvider(),
         DatabaseProvider(),
         AsyncRedisProvider(),
+        RepositoryProvider(),
+        ServiceProvider(),
     ]
