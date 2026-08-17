@@ -1,9 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import DECIMAL, Date, DateTime, String, Text
+from sqlalchemy import DECIMAL, Date, DateTime, String
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -22,8 +22,8 @@ class Contract(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
     amount: Mapped[Decimal] = mapped_column(DECIMAL(18, 2), nullable=True)
-    start_date: Mapped[datetime] = mapped_column(Date(), nullable=True)
-    end_date: Mapped[datetime] = mapped_column(Date(), nullable=True)
+    start_date: Mapped[date] = mapped_column(Date(), nullable=True)
+    end_date: Mapped[date] = mapped_column(Date(), nullable=True)
     requirements: Mapped[list[str]] = mapped_column(postgresql.JSONB(none_as_null=True), nullable=True, default=[])
     penalties: Mapped[list[str]] = mapped_column(postgresql.JSONB(none_as_null=True), nullable=True, default=[])
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
